@@ -10,6 +10,9 @@ import {
   Send,
   User,
   X,
+  Mic,
+  Square,
+  Play,
 } from "lucide-react";
 
 type RoomData = {
@@ -47,6 +50,13 @@ export default function RoomPage() {
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState("Connecting...");
   const [showChat, setShowChat] = useState(true);
+
+  // Audio recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   const callFrameRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -92,7 +102,7 @@ export default function RoomPage() {
 
   useEffect(() => {
     loadMessages();
-    const interval = setInterval(loadMessages, 10000);
+    const interval = setInterval(loadMessages, 8000);
     return () => clearInterval(interval);
   }, [loadMessages]);
 
@@ -130,6 +140,7 @@ export default function RoomPage() {
         frame.on("participant-joined", () => {
           const p = frame.participants();
           setParticipants(Object.keys(p || {}).length);
+          setShowLeaveMessage(false);
         });
 
         frame.on("participant-left", () => {
@@ -137,7 +148,7 @@ export default function RoomPage() {
           const count = Object.keys(p || {}).length;
           setParticipants(count);
           if (count <= 1) {
-            setTimeout(() => setShowLeaveMessage(true), 3000);
+            setTimeout(() => setShowLeaveMessage(true), 2500);
           }
         });
 
@@ -176,6 +187,45 @@ export default function RoomPage() {
     };
   }, [room, nameSet, name]);
 
+  // Audio recording helpers
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      chunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        setAudioBlob(blob);
+        setAudioUrl(URL.createObjectURL(blob));
+        stream.getTracks().forEach((t) => t.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      alert("Could not access microphone. Please allow microphone access.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const clearRecording = () => {
+    setAudioBlob(null);
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(null);
+  };
+
   const sendChatMessage = async () => {
     if (!newMessage.trim()) return;
     const text = newMessage.trim();
@@ -205,19 +255,46 @@ export default function RoomPage() {
   };
 
   const leaveMessage = async () => {
-    if (!leaveText.trim()) return;
+    if (!leaveText.trim() && !audioBlob) return;
+
     try {
-      await fetch("/api/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          roomId,
-          senderName: name || "Guest",
-          type: "text",
-          content: leaveText.trim(),
-        }),
-      });
+      // Save text message if present
+      if (leaveText.trim()) {
+        await fetch("/api/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            roomId,
+            senderName: name || "Guest",
+            type: "text",
+            content: leaveText.trim(),
+          }),
+        });
+      }
+
+      // Save audio as base64 data URL (simple approach – works without Storage setup)
+      if (audioBlob) {
+        const reader = new FileReader();
+        const base64Promise = new Promise<string>((resolve) => {
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(audioBlob);
+        });
+        const base64 = await base64Promise;
+
+        await fetch("/api/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            roomId,
+            senderName: name || "Guest",
+            type: "audio",
+            content: base64,
+          }),
+        });
+      }
+
       setLeaveText("");
+      clearRecording();
       setShowLeaveMessage(false);
       alert("Message saved! The room owner will see it when they open the room.");
       loadMessages();
@@ -362,7 +439,7 @@ export default function RoomPage() {
               </p>
             )}
             {messages.map((m) => (
-              <div key={m.id} className="space-y-0.5">
+              <div key={m.id} className="space-y-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-xs font-medium text-rose-400">
                     {m.sender_name}
@@ -374,7 +451,11 @@ export default function RoomPage() {
                     })}
                   </span>
                 </div>
-                <p className="text-sm text-zinc-200 break-words">{m.content}</p>
+                {m.type === "audio" ? (
+                  <audio controls src={m.content} className="w-full max-w-[220px] h-8" />
+                ) : (
+                  <p className="text-sm text-zinc-200 break-words">{m.content}</p>
+                )}
               </div>
             ))}
           </div>
@@ -408,6 +489,7 @@ export default function RoomPage() {
             <p className="text-sm text-zinc-400">
               Leave a message for when they open the room. They&apos;ll see it right away.
             </p>
+
             <textarea
               value={leaveText}
               onChange={(e) => setLeaveText(e.target.value)}
@@ -415,15 +497,56 @@ export default function RoomPage() {
               rows={3}
               className="w-full px-3 py-2 rounded-xl bg-zinc-800 border border-zinc-700 text-sm focus:outline-none focus:ring-1 focus:ring-rose-500 resize-none"
             />
-            <div className="flex gap-2">
+
+            {/* Audio recording */}
+            <div className="space-y-2">
+              <p className="text-xs text-zinc-500">Optional: record a short voice message</p>
+              <div className="flex items-center gap-3">
+                {!isRecording && !audioUrl && (
+                  <button
+                    onClick={startRecording}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm"
+                  >
+                    <Mic className="w-4 h-4 text-rose-400" />
+                    Record audio
+                  </button>
+                )}
+                {isRecording && (
+                  <button
+                    onClick={stopRecording}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-sm"
+                  >
+                    <Square className="w-4 h-4" />
+                    Stop recording
+                  </button>
+                )}
+                {audioUrl && (
+                  <div className="flex items-center gap-2 flex-1">
+                    <audio controls src={audioUrl} className="h-8 flex-1" />
+                    <button
+                      onClick={clearRecording}
+                      className="text-xs text-zinc-400 hover:text-white"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-1">
               <button
                 onClick={leaveMessage}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 font-medium text-sm"
+                disabled={!leaveText.trim() && !audioBlob}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Save message
               </button>
               <button
-                onClick={() => setShowLeaveMessage(false)}
+                onClick={() => {
+                  setShowLeaveMessage(false);
+                  clearRecording();
+                }}
                 className="px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm"
               >
                 Keep waiting
