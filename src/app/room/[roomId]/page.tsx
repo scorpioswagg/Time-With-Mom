@@ -1,19 +1,15 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import DailyIframe from "@daily-co/daily-js";
 import {
-  Mic,
-  MicOff,
-  Video,
-  VideoOff,
-  PhoneOff,
   Copy,
   Check,
   MessageCircle,
   Send,
   User,
+  X,
 } from "lucide-react";
 
 type RoomData = {
@@ -40,12 +36,8 @@ export default function RoomPage() {
 
   const [room, setRoom] = useState<RoomData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [callObject, setCallObject] = useState<any>(null);
   const [joined, setJoined] = useState(false);
   const [participants, setParticipants] = useState(0);
-  const [localAudio, setLocalAudio] = useState(true);
-  const [localVideo, setLocalVideo] = useState(true);
   const [name, setName] = useState("");
   const [nameSet, setNameSet] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -54,6 +46,10 @@ export default function RoomPage() {
   const [leaveText, setLeaveText] = useState("");
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState("Connecting...");
+  const [showChat, setShowChat] = useState(true);
+
+  const callFrameRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Load room data
   useEffect(() => {
@@ -61,7 +57,6 @@ export default function RoomPage() {
       try {
         const res = await fetch(`/api/rooms?id=${roomId}`);
         if (!res.ok) {
-          // Room may not exist in DB yet; create a fallback
           setRoom({
             id: roomId,
             daily_room_url: `https://timewithmom.daily.co/twm-${roomId}`,
@@ -97,49 +92,71 @@ export default function RoomPage() {
 
   useEffect(() => {
     loadMessages();
-    const interval = setInterval(loadMessages, 8000);
+    const interval = setInterval(loadMessages, 10000);
     return () => clearInterval(interval);
   }, [loadMessages]);
 
-  // Join Daily call once name is set and room is ready
+  // Create and join Daily frame once name is set
   useEffect(() => {
-    if (!room || !nameSet || joined) return;
+    if (!room || !nameSet || !containerRef.current || callFrameRef.current) return;
 
-    let call: any;
+    let frame: any;
 
-    async function joinCall() {
+    async function startCall() {
       try {
         setStatus("Joining call...");
-        call = DailyIframe.createCallObject({
-          audioSource: true,
-          videoSource: true,
+
+        frame = DailyIframe.createFrame(containerRef.current!, {
+          iframeStyle: {
+            width: "100%",
+            height: "100%",
+            border: "0",
+            borderRadius: "0",
+          },
+          showLeaveButton: true,
+          showFullscreenButton: true,
+          activeSpeakerMode: false,
         });
 
-        call.on("joined-meeting", () => {
+        callFrameRef.current = frame;
+
+        frame.on("joined-meeting", (event: any) => {
           setJoined(true);
           setStatus("In call");
-          updateParticipantCount(call);
+          const count = Object.keys(event?.participants || frame.participants() || {}).length;
+          setParticipants(count || 1);
         });
 
-        call.on("participant-joined", () => updateParticipantCount(call));
-        call.on("participant-left", () => updateParticipantCount(call));
-        call.on("left-meeting", () => {
+        frame.on("participant-joined", () => {
+          const p = frame.participants();
+          setParticipants(Object.keys(p || {}).length);
+        });
+
+        frame.on("participant-left", () => {
+          const p = frame.participants();
+          const count = Object.keys(p || {}).length;
+          setParticipants(count);
+          if (count <= 1) {
+            setTimeout(() => setShowLeaveMessage(true), 3000);
+          }
+        });
+
+        frame.on("left-meeting", () => {
           setJoined(false);
           setStatus("Left call");
+          window.location.href = "/";
         });
 
-        call.on("error", (e: any) => {
+        frame.on("error", (e: any) => {
           console.error("Daily error", e);
           setStatus("Connection issue – you can still leave a message");
           setShowLeaveMessage(true);
         });
 
-        await call.join({
+        await frame.join({
           url: room!.daily_room_url,
           userName: name || "Guest",
         });
-
-        setCallObject(call);
       } catch (err) {
         console.error(err);
         setStatus("Could not join video – leave a message instead");
@@ -147,53 +164,22 @@ export default function RoomPage() {
       }
     }
 
-    joinCall();
+    startCall();
 
     return () => {
-      if (call) {
-        call.destroy();
+      if (frame) {
+        try {
+          frame.destroy();
+        } catch {}
       }
+      callFrameRef.current = null;
     };
-  }, [room, nameSet, joined, name]);
-
-  function updateParticipantCount(call: any) {
-    const count = Object.keys(call.participants() || {}).length;
-    setParticipants(count);
-    if (count <= 1 && !isAdmin) {
-      // Only one person (or none) – offer leave message option after a bit
-      setTimeout(() => {
-        if (Object.keys(call.participants() || {}).length <= 1) {
-          setShowLeaveMessage(true);
-        }
-      }, 4000);
-    }
-  }
-
-  const toggleAudio = () => {
-    if (!callObject) return;
-    callObject.setLocalAudio(!localAudio);
-    setLocalAudio(!localAudio);
-  };
-
-  const toggleVideo = () => {
-    if (!callObject) return;
-    callObject.setLocalVideo(!localVideo);
-    setLocalVideo(!localVideo);
-  };
-
-  const leaveCall = () => {
-    if (callObject) {
-      callObject.leave();
-      callObject.destroy();
-    }
-    window.location.href = "/";
-  };
+  }, [room, nameSet, name]);
 
   const sendChatMessage = async () => {
     if (!newMessage.trim()) return;
     const text = newMessage.trim();
     setNewMessage("");
-    // Optimistic
     const temp: Message = {
       id: Date.now().toString(),
       room_id: roomId,
@@ -258,7 +244,6 @@ export default function RoomPage() {
     );
   }
 
-  // Name entry gate (optional but nice)
   if (!nameSet) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-gradient-to-b from-rose-50 to-white dark:from-zinc-950 dark:to-zinc-900">
@@ -303,7 +288,7 @@ export default function RoomPage() {
   return (
     <div className="min-h-screen flex flex-col bg-zinc-950 text-white">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur">
+      <header className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900/90 backdrop-blur z-10">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-rose-600 flex items-center justify-center">
             <User className="w-4 h-4" />
@@ -323,86 +308,51 @@ export default function RoomPage() {
               {copied ? "Copied" : "Copy link"}
             </button>
           )}
-          <span className="text-xs text-zinc-400">
+          <button
+            onClick={() => setShowChat(!showChat)}
+            className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 lg:hidden"
+            title="Toggle chat"
+          >
+            <MessageCircle className="w-4 h-4" />
+          </button>
+          <span className="text-xs text-zinc-400 hidden sm:inline">
             {participants} {participants === 1 ? "person" : "people"}
           </span>
         </div>
       </header>
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-        {/* Video area */}
-        <div className="flex-1 relative bg-black flex items-center justify-center min-h-[40vh]">
-          {joined && callObject ? (
-            <div
-              id="daily-video-container"
-              className="w-full h-full"
-              ref={(el) => {
-                // Daily attaches its own UI when using createCallObject without iframe
-                // For simplicity we use the built-in Daily UI via createFrame in production;
-                // here we show status + controls.
-              }}
-            >
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6">
-                <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center mb-4">
-                  <User className="w-12 h-12 text-zinc-500" />
-                </div>
-                <p className="text-lg font-medium">{name || "You"}</p>
-                <p className="text-sm text-zinc-400 mt-1">
-                  {participants <= 1
-                    ? "Waiting for others to join..."
-                    : `${participants} people in the call`}
-                </p>
-                <p className="text-xs text-zinc-500 mt-4 max-w-xs">
-                  Video is active. Use the controls below. Share the link so loved ones can join instantly.
-                </p>
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+        {/* Video container – Daily iframe lives here */}
+        <div className="flex-1 relative bg-black min-h-[50vh] lg:min-h-0">
+          <div ref={containerRef} className="absolute inset-0 w-full h-full" />
+          {!joined && (
+            <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/80 z-10 pointer-events-none">
+              <div className="text-center">
+                <div className="w-10 h-10 border-2 border-rose-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-zinc-300">{status}</p>
               </div>
             </div>
-          ) : (
-            <div className="text-center p-6">
-              <p className="text-zinc-400">{status}</p>
-            </div>
           )}
-
-          {/* Controls */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-zinc-900/90 backdrop-blur px-4 py-3 rounded-2xl border border-zinc-700">
-            <button
-              onClick={toggleAudio}
-              className={`p-3 rounded-full transition ${
-                localAudio
-                  ? "bg-zinc-700 hover:bg-zinc-600"
-                  : "bg-red-600 hover:bg-red-500"
-              }`}
-              title={localAudio ? "Mute" : "Unmute"}
-            >
-              {localAudio ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-            </button>
-            <button
-              onClick={toggleVideo}
-              className={`p-3 rounded-full transition ${
-                localVideo
-                  ? "bg-zinc-700 hover:bg-zinc-600"
-                  : "bg-red-600 hover:bg-red-500"
-              }`}
-              title={localVideo ? "Turn camera off" : "Turn camera on"}
-            >
-              {localVideo ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-            </button>
-            <button
-              onClick={leaveCall}
-              className="p-3 rounded-full bg-red-600 hover:bg-red-500 transition"
-              title="Leave call"
-            >
-              <PhoneOff className="w-5 h-5" />
-            </button>
-          </div>
         </div>
 
-        {/* Sidebar: Chat + Messages */}
-        <div className="w-full lg:w-80 border-t lg:border-t-0 lg:border-l border-zinc-800 flex flex-col bg-zinc-900 max-h-[50vh] lg:max-h-none">
-          <div className="px-4 py-3 border-b border-zinc-800 flex items-center gap-2">
-            <MessageCircle className="w-4 h-4 text-rose-400" />
-            <span className="font-medium text-sm">Messages</span>
+        {/* Chat sidebar */}
+        <div
+          className={`${
+            showChat ? "flex" : "hidden"
+          } lg:flex w-full lg:w-80 border-t lg:border-t-0 lg:border-l border-zinc-800 flex-col bg-zinc-900 max-h-[45vh] lg:max-h-none`}
+        >
+          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <MessageCircle className="w-4 h-4 text-rose-400" />
+              <span className="font-medium text-sm">Messages</span>
+            </div>
+            <button
+              onClick={() => setShowChat(false)}
+              className="lg:hidden p-1 text-zinc-400"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -450,7 +400,7 @@ export default function RoomPage() {
         </div>
       </div>
 
-      {/* Leave a message modal / panel when alone */}
+      {/* Leave a message when alone */}
       {showLeaveMessage && participants <= 1 && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-md bg-zinc-900 rounded-2xl border border-zinc-700 p-6 space-y-4">
