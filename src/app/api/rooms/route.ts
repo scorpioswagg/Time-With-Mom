@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createDailyRoom } from "@/lib/daily";
-import { v4 as uuidv4 } from "uuid";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || "",
@@ -23,7 +22,7 @@ export async function POST(request: NextRequest) {
       dailyRoom = await createDailyRoom(dailyRoomName);
     } catch (err: any) {
       console.error("Daily room creation failed:", err);
-      // Fallback: still create local room entry so flow works without Daily key during setup
+      // Fallback so the flow still works if the Daily key is missing during setup
       dailyRoom = {
         name: dailyRoomName,
         url: `https://timewithmom.daily.co/${dailyRoomName}`,
@@ -45,7 +44,7 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error("Supabase insert error:", error);
-      // Still return a usable room even if DB fails (for demo)
+      // Still return a usable room even if DB fails
       return NextResponse.json({
         id: roomId,
         daily_room_name: dailyRoom.name || dailyRoomName,
