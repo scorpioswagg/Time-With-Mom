@@ -12,9 +12,9 @@ Built for the people who matter most.
 
 - **One-click room creation** – Admin gets a shareable link instantly
 - **Zero-friction join** – Guests click the link and are ready to talk (optional name only)
-- **Video calls** for up to 4 people (Daily.co powered – high quality, adaptive bitrate, noise suppression)
+- **High-quality video calls** for up to 4 people (Daily.co – adaptive bitrate, noise suppression, echo cancellation)
 - **Real-time text chat** while in the room
-- **Leave a message** when the room is empty (text; video/audio can be extended)
+- **Leave a message** when the room is empty (text + optional short audio recording)
 - Fully responsive, works on mobile & desktop
 - Modern browsers only (Chrome, Safari, Firefox, Edge) – no plugins
 
@@ -22,41 +22,50 @@ Built for the people who matter most.
 
 ## Tech Stack
 
-| Layer        | Technology                          |
-|--------------|-------------------------------------|
-| Frontend     | Next.js 15 (App Router) + Tailwind  |
-| Video        | Daily.co                            |
-| Database / Realtime | Supabase                       |
-| Hosting      | Vercel                              |
+| Layer              | Technology                         |
+|--------------------|------------------------------------|
+| Frontend           | Next.js 15 (App Router) + Tailwind |
+| Video              | Daily.co                           |
+| Database / Realtime| Supabase                           |
+| Hosting            | Vercel                             |
 
 ---
 
-## Quick Start (Local)
+## Environment Variables
 
-### 1. Clone & install
+Create a `.env.local` (or set these in Vercel):
 
-```bash
-git clone https://github.com/scorpioswagg/Time-With-Mom.git
-cd Time-With-Mom
-npm install
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...   # or legacy anon key
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_...            # or legacy service_role key
+DAILY_API_KEY=your-daily-api-key
 ```
 
-### 2. Environment variables
+### How to get the keys
 
-```bash
-cp .env.example .env.local
-```
+**Supabase**
+1. Go to [supabase.com](https://supabase.com) → create a project
+2. Project Settings → **API Keys**
+3. Copy:
+   - Project URL → `NEXT_PUBLIC_SUPABASE_URL`
+   - **Publishable key** (or legacy **anon** key) → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - **Secret key** (or legacy **service_role** key) → `SUPABASE_SERVICE_ROLE_KEY`
 
-Fill in the values (see below for how to get them).
+**Daily.co**
+1. Go to [dashboard.daily.co](https://dashboard.daily.co) and sign up
+2. Left sidebar → **Developers**
+3. Copy the API key → `DAILY_API_KEY`
 
-### 3. Supabase setup
+---
 
-1. Create a free project at [supabase.com](https://supabase.com)
-2. Go to **SQL Editor** and run this schema:
+## Supabase Database Setup
+
+Go to **SQL Editor** in your Supabase project and run:
 
 ```sql
 -- Rooms table
-create table public.rooms (
+create table if not exists public.rooms (
   id text primary key,
   name text,
   daily_room_name text not null,
@@ -66,7 +75,7 @@ create table public.rooms (
 );
 
 -- Messages table
-create table public.messages (
+create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
   room_id text references public.rooms(id) on delete cascade,
   sender_name text not null default 'Guest',
@@ -75,26 +84,28 @@ create table public.messages (
   created_at timestamptz default now()
 );
 
--- Enable RLS (optional but recommended)
+-- Enable Row Level Security
 alter table public.rooms enable row level security;
 alter table public.messages enable row level security;
 
--- Allow public read/write for simplicity (tighten later if needed)
-create policy "Allow all on rooms" on public.rooms for all using (true) with check (true);
-create policy "Allow all on messages" on public.messages for all using (true) with check (true);
+-- Open policies (suitable for this personal app)
+create policy "Allow all on rooms" on public.rooms
+  for all using (true) with check (true);
+
+create policy "Allow all on messages" on public.messages
+  for all using (true) with check (true);
 ```
 
-3. Copy **Project URL** and **anon key** + **service_role key** into `.env.local`.
+---
 
-### 4. Daily.co setup
-
-1. Sign up at [daily.co](https://www.daily.co)
-2. Create an API key in the dashboard
-3. Put it in `.env.local` as `DAILY_API_KEY`
-
-### 5. Run
+## Local Development
 
 ```bash
+git clone https://github.com/scorpioswagg/Time-With-Mom.git
+cd Time-With-Mom
+npm install
+cp .env.example .env.local
+# → fill in the four values above
 npm run dev
 ```
 
@@ -102,44 +113,36 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ---
 
-## Deploy to Vercel (one-click)
+## Deploy to Vercel
 
 1. Go to [vercel.com](https://vercel.com) and sign in with GitHub
-2. Click **Add New Project** → Import `scorpioswagg/Time-With-Mom`
-3. In **Environment Variables**, add:
-
-   | Name                         | Value                          |
-   |------------------------------|--------------------------------|
-   | `NEXT_PUBLIC_SUPABASE_URL`   | your Supabase project URL      |
-   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | your Supabase anon key      |
-   | `SUPABASE_SERVICE_ROLE_KEY`  | your Supabase service_role key |
-   | `DAILY_API_KEY`              | your Daily.co API key          |
-
+2. **Add New Project** → Import `scorpioswagg/Time-With-Mom`
+3. Add the four environment variables listed above
 4. Click **Deploy**
 
-That’s it. Your app will be live at `https://your-project.vercel.app`
+Your app will be live at `https://your-project.vercel.app`
 
 ---
 
-## How it works
+## How to use
 
-### Admin (room creator)
+### Admin (you)
 1. Open the homepage
 2. Click **Create Room**
-3. Copy the generated link (or the app will take you into the room automatically)
-4. Share the link via text, email, WhatsApp, etc.
+3. Copy the link that appears (or the app takes you straight into the room)
+4. Share the link via text / WhatsApp / email
 
-### Guest
+### Guest (Mom, family, friends)
 1. Click the shared link
-2. Optionally enter a name → Continue
-3. Instantly join the live video call if someone is already there
-4. If the room is empty → friendly prompt to leave a text message that the admin will see later
+2. Optionally type a name → Continue
+3. If someone is already in the room → they join the live video call immediately
+4. If the room is empty → they can leave a text (or short audio) message that you will see when you open the room later
 
-### Controls
-- Mute / Unmute mic
-- Camera on / off
-- Leave call
-- Real-time chat sidebar
+### In-call controls
+- Mute / Unmute microphone
+- Camera On / Off
+- Leave Call
+- Real-time text chat in the sidebar
 
 ---
 
@@ -148,25 +151,25 @@ That’s it. Your app will be live at `https://your-project.vercel.app`
 ```
 src/
   app/
-    page.tsx              # Landing – Create Room
-    room/[roomId]/page.tsx # Join / video / messages
+    page.tsx                 # Landing page – Create Room
+    room/[roomId]/page.tsx  # Join / video / messages
     api/
-      rooms/route.ts      # Create & fetch rooms
-      messages/route.ts   # Save & load messages
+      rooms/route.ts         # Create & fetch rooms
+      messages/route.ts      # Save & load messages
   lib/
-    daily.ts              # Daily.co API helpers
-    supabase.ts           # Supabase client + types
+    daily.ts                 # Daily.co helpers
+    supabase.ts              # Supabase client + types
     utils.ts
 ```
 
 ---
 
-## Notes & limitations
+## Notes
 
-- Video quality and features depend on your Daily.co plan (free tier is excellent for personal use).
-- Max 4 participants is enforced via Daily room properties.
-- Messages currently support text. Video/audio message recording can be added later with MediaRecorder + Supabase Storage.
-- Rooms expire after 24 hours by default (configurable in `src/lib/daily.ts`).
+- Max 4 participants is enforced by Daily room settings
+- Rooms expire after 24 hours by default
+- Free Daily plan includes 10,000 participant-minutes / month
+- Free Supabase plan is more than enough for personal use
 
 ---
 
